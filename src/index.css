@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+:root {
+  --bg: #f7f7fb;
+  --panel: #ffffff;
+  --text: #0f172a;
+  --muted: #64748b;
+  --accent: #7A2B2B; /* subtle maroon accent */
+}
+
+.dark {
+  /* Softer, more cheerful dark palette */
+  --bg: #0B1220; /* deep navy */
+  --panel: #0F1A2B; /* slightly lighter panel */
+  --text: #E6EEF8; /* bright, readable text */
+  --muted: #94B3C7; /* soft muted text */
+  --accent: #6B2020; /* dark maroon accent */
+}
+
+html, body, #root {
+  background-color: var(--bg);
+  color: var(--text);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+ .dark ::-webkit-scrollbar-thumb {
+  background: #2b3e50;
+}
+
+/* Accent utility classes (use `accent-bg` and `accent-hover`) */
+.accent-bg { background-color: var(--accent); color: white; }
+.accent-hover:hover { filter: brightness(0.92); }
+.text-accent { color: var(--accent); }
+
+/* RGB helpers for semi-transparent accents */
+:root { --accent-rgb: 122, 43, 43; --accent-dark-rgb: 107, 32, 32; }
+
+/* Soft accent background for subtle highlights */
+.accent-soft { background-color: rgba(var(--accent-rgb), 0.08); color: var(--accent); }
+
+/* Accent overlay for subtle block backgrounds */
+.accent-overlay { background-color: rgba(var(--accent-rgb), 0.03); }
+
+/* Accent gradient */
+.accent-gradient {
+  background: linear-gradient(90deg, rgba(var(--accent-rgb),1), rgba(var(--accent-dark-rgb),1));
+  color: white;
+}
+
+/* Focus ring using accent */
+.focus-ring-accent:focus {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.12);
+}
+
+/* Input helper to apply accent focus */
+.input-focus-accent:focus {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.12);
+}
+
+/* small badge using accent */
+.badge-accent { background-color: rgba(var(--accent-rgb), 0.08); color: var(--accent); padding: 0.125rem 0.5rem; border-radius: 9999px; font-weight: 600; font-size: 0.75rem; }
+
+/* Palette presets — switched via `data-palette` attribute on <html> */
+:root[data-palette="interallar"] {
+  --bg: #071018;
+  --panel: #0b1220;
+  --text: #E6EEF8;
+  --muted: #94B3C7;
+  --accent: #7A2B2B;
+  --accent-rgb: 122, 43, 43;
+  --accent-dark-rgb: 107, 32, 32;
+}
+
+:root[data-palette="mario"] {
+  --bg: #0b0706;
+  --panel: #0f0a0a;
+  --text: #ffeae8;
+  --muted: #9b604f;
+  --accent: #e02d2d;
+  --accent-rgb: 224,45,45;
+  --accent-dark-rgb: 180,30,30;
+}
+
+:root[data-palette="cyberpunk"] {
+  --bg: #03020a;
+  --panel: #0b0710;
+  --text: #e6f6ff;
+  --muted: #7f9fb3;
+  --accent: #ff00cc;
+  --accent-rgb: 255,0,204;
+  --accent-dark-rgb: 200,0,160;
+}
+
+:root[data-palette="classic"] {
+  --bg: #071018;
+  --panel: #0b1220;
+  --text: #e6eef8;
+  --muted: #8b97a2;
+  --accent: #8b2b2b;
+  --accent-rgb: 139,43,43;
+  --accent-dark-rgb: 110,34,34;
+}

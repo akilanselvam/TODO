@@ -1,0 +1,16 @@
+{
+  "name": "AK's Assistant",
+  "short_name": "AK Assistant",
+  "description": "Task manager with AI assistant.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0F2E6F",
+  "theme_color": "#0F2E6F",
+  "icons": [
+    {
+      "src": "/ak-logo-black.png",
+      "sizes": "any",
+      "type": "image/png"
+    }
+  ]
+}

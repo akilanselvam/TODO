@@ -45,7 +45,7 @@ function AppContent() {
       <Header onMenuToggle={() => setSidebarOpen(o => !o)} />
       <div className="flex flex-1 min-h-0">
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-        <main className="flex-1 min-h-0 flex flex-col">
+        <main className="flex-1 min-w-0 min-h-0 flex flex-col">
           {/* Toolbar */}
           <div className="shrink-0 flex items-center gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-700">
             <ViewSwitcher value={viewMode} onChange={setViewMode} />

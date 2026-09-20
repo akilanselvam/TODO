@@ -27,13 +27,14 @@ export default function MonthView({ cursor, onDayClick, onTaskClick }) {
       })
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col overflow-auto">
-      <div className="min-w-[640px] flex flex-col flex-1">
+    <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-y-auto overflow-x-hidden">
+      <div className="w-full min-w-0 flex flex-col flex-1">
         {/* Weekday header */}
         <div className="grid grid-cols-7 border-b border-slate-200 dark:border-slate-700 shrink-0">
           {WEEKDAY_LABELS.map(d => (
-            <div key={d} className="py-2 text-center text-[11px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
-              {d}
+            <div key={d} className="py-1.5 sm:py-2 text-center text-[9px] sm:text-[11px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+              <span className="sm:hidden">{d.slice(0, 1)}</span>
+              <span className="hidden sm:inline">{d}</span>
             </div>
           ))}
         </div>
@@ -51,12 +52,12 @@ export default function MonthView({ cursor, onDayClick, onTaskClick }) {
                   <div
                     key={di}
                     onClick={() => onDayClick(day)}
-                    className={`min-h-[92px] p-1.5 border-l border-slate-100 dark:border-slate-700/60 first:border-l-0 cursor-pointer transition-colors hover:bg-[var(--panel)] dark:hover:bg-[var(--panel)] ${
+                    className={`min-w-0 min-h-[72px] sm:min-h-[92px] p-0.5 sm:p-1.5 border-l border-slate-100 dark:border-slate-700/60 first:border-l-0 cursor-pointer transition-colors hover:bg-[var(--panel)] dark:hover:bg-[var(--panel)] ${
                       inMonth ? '' : 'bg-slate-50/60 dark:bg-slate-900/40'
                     }`}
                   >
                     <div className="flex justify-end">
-                      <span className={`w-6 h-6 flex items-center justify-center rounded-full text-xs font-medium ${
+                      <span className={`w-5 h-5 sm:w-6 sm:h-6 flex items-center justify-center rounded-full text-[11px] sm:text-xs font-medium ${
                         isToday(day)
                           ? 'accent-bg text-white'
                           : inMonth
@@ -67,22 +68,20 @@ export default function MonthView({ cursor, onDayClick, onTaskClick }) {
                       </span>
                     </div>
 
-                    <div className="mt-1 space-y-1">
+                    <div className="mt-0.5 sm:mt-1 space-y-0.5 sm:space-y-1">
                       {shown.map(t => (
                         <button
                           key={t.id}
                           onClick={e => { e.stopPropagation(); onTaskClick(t) }}
-                          className={`w-full flex items-center gap-1 px-1.5 py-0.5 rounded border-l-2 text-[11px] font-medium truncate ${priorityChip[t.priority]} ${t.completed ? 'line-through opacity-60' : ''}`}
+                          className={`w-full min-w-0 flex items-center gap-1 px-1 sm:px-1.5 py-0.5 rounded border-l-2 text-[9px] sm:text-[11px] font-medium truncate ${priorityChip[t.priority]} ${t.completed ? 'line-through opacity-60' : ''}`}
                           title={`${t.dueTime ? formatTimeLabel(t.dueTime) + ' · ' : ''}${t.title}`}
                         >
-                          {t.dueTime && (
-                            <span className="opacity-70 tabular-nums shrink-0">{formatTimeLabel(t.dueTime).replace(' ', '')}</span>
-                          )}
+                          {t.dueTime && <span className="hidden sm:inline opacity-70 tabular-nums shrink-0">{formatTimeLabel(t.dueTime).replace(' ', '')}</span>}
                           <span className="truncate">{t.title}</span>
                         </button>
                       ))}
                       {extra > 0 && (
-                        <div className="text-[10px] text-slate-400 dark:text-slate-500 pl-1">+{extra} more</div>
+                        <div className="text-[9px] sm:text-[10px] text-slate-400 dark:text-slate-500 pl-1">+{extra}</div>
                       )}
                     </div>
                   </div>

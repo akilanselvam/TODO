@@ -1,1 +1,43 @@
-/spendwise-export-2026-07-31.csv
+# dependencies
+node_modules/
+dist/
+.vite/
+
+# environment / local config
+.env
+.env.*
+!.env.example
+.firebase/
+
+# local runtime artifacts
+*.log
+*.tmp
+
+# generated exports and docs
+*.pdf
+*.csv
+*.html
+
+# local scratch / notes
+not.txt
+
+# root-level generated design assets
+/AK_Assistant.ico
+/output-onlinepngtools.png
+/icons(1).svg
+/ChatGPT\ Image* 
+/Gemini_Generated_Image*
+
+# editor / OS noise
+.vscode/
+.DS_Store
+Thumbs.db
+
+# local project-generation scripts kept out of source control
+/generate_system_design_pdf.py
+/flowchart_lld_pdf.py
+/black_white_flowchart_pdf.py
+
+# generated project artifacts / exports
+/TODO-system-design.*
+/TODO-flowchart-*.pdf

@@ -1,5 +1,17 @@
 import { createContext, useContext, useReducer, useEffect, useRef, useState } from 'react'
-import { doc, onSnapshot, setDoc } from 'firebase/firestore'
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  writeBatch,
+} from 'firebase/firestore'
 import { nanoid } from '../utils/nanoid'
 import { db } from '../services/firebase'
 import { useAuth } from './AuthContext'
@@ -160,6 +172,41 @@ function reducer(state, action) {
 
 const serialize = (todos, categories) => JSON.stringify({ todos, categories })
 
+const categoryDocId = name => encodeURIComponent(name)
+
+function taskDocument(task, isNew) {
+  return {
+    ...task,
+    // Firestore owns ordering/audit timestamps. The UI still keeps its ISO
+    // timestamps for local mode, but cloud writes are authoritative.
+    createdAt: isNew || !task.createdAt ? serverTimestamp() : task.createdAt,
+    updatedAt: serverTimestamp(),
+  }
+}
+
+async function seedCloudData({ uid, todos, categories }) {
+  // Batches are capped at 500 Firestore operations. Keeping this chunked also
+  // makes first sign-in migration safe for a large existing local task list.
+  const operations = [
+    ...todos.map(todo => ({
+      ref: doc(db, 'users', uid, 'tasks', todo.id),
+      data: taskDocument(todo, true),
+    })),
+    ...categories.map(name => ({
+      ref: doc(db, 'users', uid, 'categories', categoryDocId(name)),
+      data: { name, createdAt: serverTimestamp(), updatedAt: serverTimestamp() },
+    })),
+  ]
+
+  for (let start = 0; start < operations.length; start += 500) {
+    const batch = writeBatch(db)
+    for (const operation of operations.slice(start, start + 500)) {
+      batch.set(operation.ref, operation.data)
+    }
+    await batch.commit()
+  }
+}
+
 export function TodoProvider({ children }) {
   const { user, firebaseEnabled } = useAuth()
   const uid = user?.uid || null
@@ -171,6 +218,9 @@ export function TodoProvider({ children }) {
 
   // Serialized snapshot of the last data we synced — guards against write/echo loops.
   const lastSyncedRef = useRef(null)
+  // The latest server snapshot lets us write only documents that changed,
+  // rather than replacing a user's entire task collection on every edit.
+  const remoteDataRef = useRef({ todos: [], categories: [] })
   // True once the active backend has delivered its initial data (prevents an
   // early local-state write from clobbering existing cloud data on load).
   const readyRef = useRef(false)
@@ -186,27 +236,61 @@ export function TodoProvider({ children }) {
     setSyncError('')
 
     if (mode === 'firestore') {
-      const ref = doc(db, 'users', uid)
-      const unsub = onSnapshot(
-        ref,
-        snap => {
-          if (!snap.exists()) {
-            // First sign-in: seed the cloud with local data so nothing is lost.
-            const seed = { todos: dataRef.current.todos, categories: dataRef.current.categories }
-            lastSyncedRef.current = serialize(seed.todos, seed.categories)
-            setDoc(ref, seed).catch(e => setSyncError(e.message))
-            dispatch({ type: 'SET_DATA', payload: seed })
-          } else {
-            const data = snap.data()
-            const payload = { todos: data.todos || [], categories: data.categories || defaultState.categories }
+      let cancelled = false
+      let stopTasks = () => {}
+      let stopCategories = () => {}
+
+      const startSync = async () => {
+        const userRef = doc(db, 'users', uid)
+        const tasksRef = collection(userRef, 'tasks')
+        const categoriesRef = collection(userRef, 'categories')
+
+        try {
+          // Migrate the original single-document layout only when the new
+          // collections are empty. The legacy document is left in place as a
+          // rollback copy and is ignored after migration.
+          const [taskDocs, categoryDocs, legacy] = await Promise.all([
+            getDocs(tasksRef), getDocs(categoriesRef), getDoc(userRef),
+          ])
+          if (cancelled) return
+
+          if (taskDocs.empty && categoryDocs.empty) {
+            const old = legacy.exists() ? legacy.data() : null
+            const seed = old
+              ? { todos: old.todos || [], categories: old.categories || defaultCategories }
+              : dataRef.current
+            await seedCloudData({ uid, todos: seed.todos, categories: seed.categories })
+          }
+          if (cancelled) return
+
+          let todos = null
+          let categories = null
+          const publish = () => {
+            if (!todos || !categories) return
+            const payload = { todos, categories: categories.length ? categories : defaultCategories }
+            remoteDataRef.current = payload
             lastSyncedRef.current = serialize(payload.todos, payload.categories)
             dispatch({ type: 'SET_DATA', payload })
+            readyRef.current = true
           }
-          readyRef.current = true
-        },
-        err => { setSyncError(err.message); readyRef.current = true }
-      )
-      return unsub
+
+          stopTasks = onSnapshot(
+            query(tasksRef, orderBy('createdAt', 'desc')),
+            snap => { todos = snap.docs.map(task => ({ ...task.data(), id: task.id })); publish() },
+            err => { setSyncError(err.message); readyRef.current = true }
+          )
+          stopCategories = onSnapshot(
+            query(categoriesRef, orderBy('name')),
+            snap => { categories = snap.docs.map(category => category.data().name).filter(Boolean); publish() },
+            err => { setSyncError(err.message); readyRef.current = true }
+          )
+        } catch (err) {
+          if (!cancelled) { setSyncError(err.message || String(err)); readyRef.current = true }
+        }
+      }
+
+      startSync()
+      return () => { cancelled = true; stopTasks(); stopCategories() }
     }
 
     // Local mode: load once from localStorage.
@@ -223,8 +307,40 @@ export function TodoProvider({ children }) {
     if (s === lastSyncedRef.current) return // no change, or an echo from a snapshot
     lastSyncedRef.current = s
     if (mode === 'firestore') {
-      setDoc(doc(db, 'users', uid), { todos: state.todos, categories: state.categories }, { merge: true })
-        .catch(e => setSyncError(e.message))
+      const previous = remoteDataRef.current
+      const previousTodos = new Map(previous.todos.map(todo => [todo.id, todo]))
+      const nextTodos = new Map(state.todos.map(todo => [todo.id, todo]))
+      const previousCategories = new Set(previous.categories)
+      const nextCategories = new Set(state.categories)
+      const writes = []
+
+      for (const [id, todo] of nextTodos) {
+        if (JSON.stringify(todo) !== JSON.stringify(previousTodos.get(id))) {
+          writes.push(setDoc(
+            doc(db, 'users', uid, 'tasks', id),
+            taskDocument(todo, !previousTodos.has(id)),
+            { merge: true }
+          ))
+        }
+      }
+      for (const id of previousTodos.keys()) {
+        if (!nextTodos.has(id)) writes.push(deleteDoc(doc(db, 'users', uid, 'tasks', id)))
+      }
+      for (const name of nextCategories) {
+        if (!previousCategories.has(name)) {
+          writes.push(setDoc(doc(db, 'users', uid, 'categories', categoryDocId(name)), {
+            name, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+          }))
+        }
+      }
+      for (const name of previousCategories) {
+        if (!nextCategories.has(name)) writes.push(deleteDoc(doc(db, 'users', uid, 'categories', categoryDocId(name))))
+      }
+
+      // Mark the local snapshot optimistic so a re-render before Firestore's
+      // listener echo does not schedule the same document writes again.
+      remoteDataRef.current = { todos: state.todos, categories: state.categories }
+      if (writes.length) Promise.all(writes).catch(e => setSyncError(e.message))
     } else {
       saveState({ todos: state.todos, categories: state.categories })
     }

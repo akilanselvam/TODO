@@ -20,12 +20,19 @@ that can reach Firebase, and it switches on automatically.
 
 - On your **first sign-in**, whatever is currently in `localStorage` is copied up
   to your cloud document (so you don't lose local tasks).
-- After that, the cloud document is the source of truth and every device with the
-  same Google account stays in sync live (via a Firestore `onSnapshot` listener).
+- After that, the cloud collections are the source of truth and every device with
+  the same Google account stays in sync live (via Firestore `onSnapshot` listeners).
 - Sign out → back to local mode.
 
-Data model: a single document per user at **`users/{uid}`** shaped as
-`{ todos: [...], categories: [...] }`. (Tasks include their subtasks inline.)
+Data model: tasks and categories are separate documents, so editing one task
+does not rewrite the user's entire task list:
+
+- `users/{uid}/tasks/{taskId}` — task fields and inline subtasks
+- `users/{uid}/categories/{encodedCategoryName}` — `{ name, createdAt, updatedAt }`
+
+Firestore owns cloud audit timestamps. The app automatically migrates the older
+`users/{uid}` document (`{ todos: [...], categories: [...] }`) the first time a
+signed-in user opens the update, retaining that document as a rollback copy.
 
 ---
 
@@ -104,7 +111,7 @@ Authentication → Settings → **Authorized domains**.
 - `src/services/firebase.js` — reads env, initialises Firebase only if configured.
 - `src/context/AuthContext.jsx` — Google sign-in/out, current user.
 - `src/context/TodoContext.jsx` — picks backend (`local` vs `firestore`),
-  `onSnapshot` subscription, guarded writes, first-sign-in seeding.
+  per-task/category listeners and writes, plus first-sign-in seeding/migration.
 - `firestore.rules`, `firebase.json` — security rules + hosting config.
 
 ## Troubleshooting

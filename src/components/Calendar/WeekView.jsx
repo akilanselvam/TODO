@@ -1,130 +1,238 @@
+import { useState, useEffect } from 'react'
 import { useTodo } from '../../context/TodoContext'
+import { useLanguage } from '../../context/LanguageContext'
 import {
-  HOURS, HOUR_HEIGHT, WEEKDAY_LABELS,
-  getWeekDays, isSameDay, isToday, layoutDayTasks, formatHour, formatTimeLabel,
+  WEEKDAY_LABELS, getWeekDays, isSameDay, isToday, formatTimeLabel, minutesOf,
 } from '../../utils/calendar'
 
-const priorityBlock = {
-  high: 'bg-red-100 border-red-400 text-red-800 dark:bg-red-900/40 dark:border-red-500 dark:text-red-200',
-  medium: 'bg-amber-100 border-amber-400 text-amber-800 dark:bg-amber-900/40 dark:border-amber-500 dark:text-amber-200',
-  low: 'bg-green-100 border-green-400 text-green-800 dark:bg-green-900/40 dark:border-green-500 dark:text-green-200',
+const priorityStyle = {
+  high:   { dot: '#ef4444', border: '#ef4444', bg: 'rgba(239,68,68,0.12)',   text: '#fca5a5' },
+  medium: { dot: '#f59e0b', border: '#f59e0b', bg: 'rgba(245,158,11,0.12)', text: '#fcd34d' },
+  low:    { dot: '#22c55e', border: '#22c55e', bg: 'rgba(34,197,94,0.12)',  text: '#86efac' },
 }
+
 export default function WeekView({ cursor, onSlotClick, onTaskClick }) {
   const { calendarTodos } = useTodo()
+  const { t, lang } = useLanguage()
   const days = getWeekDays(cursor)
 
-  const tasksFor = day => calendarTodos.filter(t => isSameDay(new Date(t.dueDate), day))
-  const allDayFor = day => tasksFor(day).filter(t => !t.dueTime)
-  const timedFor = day => tasksFor(day).filter(t => t.dueTime)
+  const [selectedDay, setSelectedDay] = useState(() => {
+    const today = new Date()
+    return days.find(d => isSameDay(d, today)) || days[0]
+  })
 
-  const hasAnyAllDay = days.some(d => allDayFor(d).length > 0)
+  useEffect(() => {
+    const today = new Date()
+    setSelectedDay(days.find(d => isSameDay(d, today)) || days[0])
+  }, [cursor]) // eslint-disable-line
+
+  const tasksForDay = day =>
+    calendarTodos
+      .filter(t => isSameDay(new Date(t.dueDate), day))
+      .sort((a, b) => {
+        if (!a.dueTime && !b.dueTime) return 0
+        if (!a.dueTime) return -1
+        if (!b.dueTime) return 1
+        return a.dueTime.localeCompare(b.dueTime)
+      })
+
+  const selectedTasks = tasksForDay(selectedDay)
+
+  const selLabel = selectedDay.toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric',
+  })
 
   return (
-    <div className="flex-1 min-w-0 min-h-0 overflow-y-auto overflow-x-hidden">
-      <div className="w-full min-w-0">
-        {/* Day headers */}
-        <div className="flex sticky top-0 z-20 bg-white/95 dark:bg-slate-800/95 backdrop-blur border-b border-slate-200 dark:border-slate-700">
-          <div className="w-8 sm:w-14 shrink-0 sticky left-0 bg-white/95 dark:bg-slate-800/95 z-10" />
-          {days.map((day, i) => (
-            <div key={i} className="flex-1 py-2 text-center border-l border-slate-100 dark:border-slate-700/60">
-              <div className="text-[9px] sm:text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                <span className="sm:hidden">{WEEKDAY_LABELS[i].slice(0, 1)}</span>
-                <span className="hidden sm:inline">{WEEKDAY_LABELS[i]}</span>
-              </div>
-              <div className={`mx-auto mt-0.5 w-5 h-5 sm:w-7 sm:h-7 flex items-center justify-center rounded-full text-[11px] sm:text-sm font-medium ${
-                isToday(day)
-                  ? 'accent-bg text-white'
-                  : 'text-slate-700 dark:text-slate-200'
-              }`}>
-                {day.getDate()}
-              </div>
-            </div>
-          ))}
-        </div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg)' }}>
 
-        {/* All-day row */}
-        {hasAnyAllDay && (
-          <div className="flex border-b border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40">
-            <div className="w-8 sm:w-14 shrink-0 sticky left-0 bg-slate-50/60 dark:bg-slate-800/40 flex items-start justify-end pr-1.5 pt-1.5 text-[10px] text-slate-400 dark:text-slate-500">
-              <span className="hidden sm:inline">all-day</span>
-            </div>
-            {days.map((day, i) => (
-              <div key={i} className="flex-1 min-h-[32px] p-1 space-y-1 border-l border-slate-100 dark:border-slate-700/60">
-                {allDayFor(day).map(t => (
-                  <button
-                    key={t.id}
-                    onClick={() => onTaskClick(t)}
-                    className={`w-full min-w-0 text-left px-0.5 sm:px-1.5 py-0.5 rounded border-l-2 text-[9px] sm:text-[11px] font-medium truncate ${priorityBlock[t.priority]} ${t.completed ? 'line-through opacity-60' : ''}`}
-                    title={t.title}
-                  >
-                    {t.title}
-                  </button>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Time grid */}
-        <div className="flex">
-          {/* Hour gutter */}
-          <div className="w-8 sm:w-14 shrink-0 sticky left-0 bg-white dark:bg-slate-800 z-10">
-            {HOURS.map(h => (
-              <div key={h} style={{ height: HOUR_HEIGHT }} className="relative">
-                <span className="absolute -top-2 right-1 sm:right-1.5 text-[8px] sm:text-[10px] text-slate-400 dark:text-slate-500">
-                  {h === 0 ? '' : formatHour(h)}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Day columns */}
+      {/* Day-strip */}
+      <div style={{ background: 'var(--panel)', borderBottom: '1px solid rgba(var(--accent-rgb),0.12)', padding: '10px 12px 12px' }}>
+        <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', scrollbarWidth: 'none' }}>
           {days.map((day, i) => {
-            const laidOut = layoutDayTasks(timedFor(day))
+            const active = isSameDay(day, selectedDay)
+            const today = isToday(day)
+            const count = tasksForDay(day).length
             return (
-              <div key={i} className="flex-1 min-w-0 relative border-l border-slate-100 dark:border-slate-700/60">
-                {/* hour cells (click to add) */}
-                {HOURS.map(h => (
-                  <div
-                    key={h}
-                    style={{ height: HOUR_HEIGHT }}
-                    onClick={() => onSlotClick(day, `${String(h).padStart(2, '0')}:00`)}
-                    className="border-b border-slate-100 dark:border-slate-700/40 hover:bg-[var(--panel)] dark:hover:bg-[var(--panel)] cursor-pointer transition-colors"
-                  />
-                ))}
-
-                {/* today background tint */}
-                {isToday(day) && (
-                  <div className="absolute inset-0 accent-overlay pointer-events-none" />
-                )}
-
-                {/* task blocks */}
-                {laidOut.map(({ todo, top, height, colIndex, colCount }) => {
-                  const widthPct = 100 / colCount
-                  return (
-                    <button
-                      key={todo.id}
-                      onClick={e => { e.stopPropagation(); onTaskClick(todo) }}
-                      style={{
-                        top,
-                        height: Math.max(height - 2, 18),
-                        left: `calc(${colIndex * widthPct}% + 2px)`,
-                        width: `calc(${widthPct}% - 4px)`,
-                      }}
-                      className={`absolute rounded-md border-l-2 px-0.5 sm:px-1.5 py-0.5 overflow-hidden text-left shadow-sm hover:shadow-md hover:z-10 transition-shadow ${priorityBlock[todo.priority]} ${todo.completed ? 'line-through opacity-60' : ''}`}
-                      title={`${formatTimeLabel(todo.dueTime)} · ${todo.title}`}
-                    >
-                      <div className="text-[9px] sm:text-[11px] font-semibold leading-tight truncate">{todo.title}</div>
-                      {height > 30 && (
-                        <div className="text-[10px] opacity-80 leading-tight">{formatTimeLabel(todo.dueTime)}</div>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
+              <button
+                key={i}
+                onClick={() => setSelectedDay(day)}
+                className="transition-all duration-150 active:scale-90"
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px',
+                  padding: '10px 10px 8px',
+                  borderRadius: '20px',
+                  background: active
+                    ? 'var(--accent)'
+                    : today
+                    ? 'rgba(var(--accent-rgb),0.14)'
+                    : 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  minWidth: '44px',
+                  flexShrink: 0,
+                }}
+              >
+                <span style={{
+                  fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+                  color: active ? 'rgba(255,255,255,0.75)' : today ? 'var(--accent)' : 'var(--muted)',
+                }}>
+                  {WEEKDAY_LABELS[i].slice(0, 1)}
+                </span>
+                <span style={{
+                  fontSize: '20px', fontWeight: 800, lineHeight: 1,
+                  color: active ? '#fff' : today ? 'var(--accent)' : 'var(--text)',
+                }}>
+                  {day.getDate()}
+                </span>
+                {/* task count dot */}
+                <span style={{
+                  width: count > 0 ? '5px' : '5px',
+                  height: '5px',
+                  borderRadius: '50%',
+                  background: count > 0
+                    ? active ? 'rgba(255,255,255,0.7)' : 'var(--accent)'
+                    : 'transparent',
+                  transition: 'background 200ms',
+                }} />
+              </button>
             )
           })}
         </div>
+      </div>
+
+      {/* Selected day header */}
+      <div style={{ padding: '20px 20px 8px', background: 'var(--bg)' }}>
+        <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '2px' }}>
+          {selLabel}
+        </p>
+        <p style={{ fontSize: '13px', color: 'var(--muted)' }}>
+          {selectedTasks.length === 0
+            ? t('no_tasks_label')
+            : lang === 'ta'
+              ? `${selectedTasks.length} பணிகள்`
+              : `${selectedTasks.length} task${selectedTasks.length !== 1 ? 's' : ''}`}
+        </p>
+      </div>
+
+      {/* Timeline */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px 100px' }}>
+        {selectedTasks.length === 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '48px', gap: '12px' }}>
+            <div style={{
+              width: '64px', height: '64px', borderRadius: '20px',
+              background: 'rgba(var(--accent-rgb),0.1)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'var(--muted)' }}>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <p style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text)' }}>{t('no_tasks_selected')}</p>
+              <p style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '4px' }}>{t('hint_tap_add')}</p>
+            </div>
+            <button
+              onClick={() => onSlotClick(selectedDay, '09:00')}
+              className="active:scale-95"
+              style={{
+                marginTop: '4px', padding: '10px 24px', borderRadius: '14px',
+                background: 'var(--accent)', border: 'none', color: '#fff',
+                fontSize: '14px', fontWeight: 700, cursor: 'pointer',
+                transition: 'all 150ms ease',
+              }}
+            >
+              {t('btn_add_task')}
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+            {selectedTasks.map((task, idx) => {
+              const ps = priorityStyle[task.priority]
+              const isLast = idx === selectedTasks.length - 1
+              return (
+                <div key={task.id} style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+                  {/* Timeline */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '14px', flexShrink: 0 }}>
+                    <div style={{
+                      width: '10px', height: '10px', borderRadius: '50%',
+                      background: ps.dot, flexShrink: 0,
+                      boxShadow: `0 0 8px ${ps.dot}60`,
+                    }} />
+                    {!isLast && (
+                      <div style={{
+                        width: '2px', flex: 1, minHeight: '28px', marginTop: '4px',
+                        background: 'linear-gradient(to bottom, rgba(var(--accent-rgb),0.25), rgba(var(--accent-rgb),0.05))',
+                        borderRadius: '1px',
+                      }} />
+                    )}
+                  </div>
+
+                  {/* Card */}
+                  <button
+                    onClick={() => onTaskClick(task)}
+                    className="active:scale-[0.98]"
+                    style={{
+                      flex: 1, textAlign: 'left',
+                      padding: '12px 14px',
+                      marginBottom: isLast ? '0' : '10px',
+                      borderRadius: '18px',
+                      background: 'var(--panel)',
+                      borderLeft: `3px solid ${ps.border}`,
+                      border: 'none', // reset
+                      borderLeftWidth: '3px',
+                      borderLeftStyle: 'solid',
+                      borderLeftColor: ps.border,
+                      cursor: 'pointer',
+                      transition: 'all 150ms ease',
+                      opacity: task.completed ? 0.55 : 1,
+                    }}
+                  >
+                    {task.dueTime && (
+                      <p style={{
+                        fontSize: '11px', fontWeight: 700, color: 'var(--muted)',
+                        marginBottom: '4px', letterSpacing: '0.03em', textTransform: 'uppercase',
+                      }}>
+                        {formatTimeLabel(task.dueTime)}
+                      </p>
+                    )}
+                    <p style={{
+                      fontSize: '15px', fontWeight: 700, color: 'var(--text)',
+                      textDecoration: task.completed ? 'line-through' : 'none',
+                      lineHeight: 1.3,
+                    }}>
+                      {task.title}
+                    </p>
+                    {task.description && (
+                      <p style={{
+                        fontSize: '12px', color: 'var(--muted)', marginTop: '4px',
+                        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}>
+                        {task.description}
+                      </p>
+                    )}
+                  </button>
+                </div>
+              )
+            })}
+
+            {/* Add more */}
+            <button
+              onClick={() => onSlotClick(selectedDay, '12:00')}
+              className="active:scale-[0.98]"
+              style={{
+                marginTop: '12px', padding: '12px', width: '100%',
+                borderRadius: '16px',
+                border: '1.5px dashed rgba(var(--accent-rgb),0.3)',
+                background: 'transparent', color: 'var(--muted)',
+                fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+                transition: 'all 150ms ease',
+              }}
+            >
+              {t('btn_add_task')}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

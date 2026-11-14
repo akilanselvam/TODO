@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useRef, useEffect, useCallback } from 'react'
 import { useTodo } from './TodoContext'
+import { useLanguage } from './LanguageContext'
 import { runAssistant } from '../services/openai'
 import { assistantToolSpecs, makeExecutors } from '../services/assistantTools'
 import { getStoredKey, setStoredKey, getStoredModel, setStoredModel } from '../services/settings'
@@ -16,7 +17,7 @@ function loadHistory() {
   return []
 }
 
-function buildSystemPrompt(todos, categories) {
+function buildSystemPrompt(todos, categories, lang) {
   const now = new Date()
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   const weekday = now.toLocaleDateString('en-US', { weekday: 'long' })
@@ -28,30 +29,60 @@ function buildSystemPrompt(todos, categories) {
       }).join('\n')
     : '(no tasks yet)'
 
-  return `You are a friendly, concise scheduling assistant built into a todo & calendar app.
-Today is ${weekday}, ${today}. Times are local, 24-hour internally (HH:MM).
+  const langInstruction = lang === 'ta'
+    ? `\nLANGUAGE: The user's preferred language is Tamil (தமிழ்). You MUST respond entirely in Tamil. Use natural, conversational Tamil. Dates and times may remain in their standard formats (YYYY-MM-DD, HH:MM). Task titles should be preserved as the user wrote them. Confirmations, questions, and all explanatory text must be in Tamil.\n`
+    : ''
 
-You can create, update, complete, delete, and find tasks, and check the user's availability, using the provided tools.
+  const nowTime = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`
 
-Rules:
-- CRITICAL: A task is only actually created, updated, completed, or deleted when you CALL the matching tool and it returns ok:true. NEVER say you did something without calling its tool in this same turn — do not fabricate confirmations. If unsure whether a task exists, call find_tasks first.
-- Resolve relative dates ("today", "tomorrow", "next Monday", "Friday") into concrete YYYY-MM-DD using today's date above.
-- To update, complete, or delete a task you MUST use its exact id from the task list below (or from find_tasks). Never invent ids. If several tasks match, ask which one.
-- You can update, reschedule, complete, reopen, or delete a task even if it is already done. Never refuse or require reopening it first just because it is completed.
-- When the user refers to a specific task, look across ALL statuses (both open and completed), not just active ones.
-- When the user gives a time but no date, assume today unless they imply otherwise.
-- After performing actions, confirm briefly what changed (title + date/time). Don't dump raw ids at the user.
-- For availability, default working hours are 09:00–18:00 unless the user says otherwise. Summarise free gaps in plain language (e.g. "You're free 2–5 PM").
-- Keep replies short and natural.
+  return `You are a friendly, concise scheduling assistant embedded in a todo & calendar app.
+Today is ${weekday}, ${today}. Current time is ${nowTime} (24-hour local). Internally all dates are YYYY-MM-DD and times are HH:MM.
+${langInstruction}
+== TOOL CALL CONTRACT (read every rule before every reply) ==
+
+1. NEVER confirm an action unless you called its tool AND it returned ok:true in THIS turn.
+   - Wrong: "I've set a reminder for skin care at 17:30." (no create_task call → hallucination)
+   - Right: call create_task → get ok:true → then say "Done! Skin care added for 17:30."
+   - If a tool returns ok:false, say what went wrong. Never pretend it succeeded.
+
+2. CREATION trigger words → call create_task IMMEDIATELY, no find_tasks first:
+   "remind me", "remind to", "set a reminder", "add a task", "add … to my list",
+   "schedule", "don't let me forget", "note down", "create a task".
+   These are NEW tasks. Do not search for duplicates unless the user explicitly says
+   "I already have one" or "find the one I added".
+
+3. find_tasks is ONLY for locating EXISTING tasks:
+   "do I have X", "find X", "show me X", "what tasks do I have", "is there a task for X".
+   Never call find_tasks when the intent is to CREATE.
+
+4. Relative time → concrete YYYY-MM-DD / HH:MM using today's date and current time above:
+   "30 mins from now" at ${nowTime} → dueDate: ${today}, dueTime: ${(() => { const d = new Date(now.getTime() + 30*60000); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') })()}
+   "in an hour" at ${nowTime} → dueDate: ${today}, dueTime: ${(() => { const d = new Date(now.getTime() + 60*60000); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') })()}
+   "tonight" → dueDate: ${today}, dueTime: 20:00
+   "morning" → dueDate: ${today}, dueTime: 09:00
+   "afternoon" → dueDate: ${today}, dueTime: 14:00
+   "evening" → dueDate: ${today}, dueTime: 18:00
+   ALWAYS set dueDate. No date given → dueDate: ${today}. Never leave dueDate empty on create_task.
+
+5. To update/complete/delete, you MUST use the exact task id from the list below or find_tasks. Never invent ids. If multiple tasks match, ask which one.
+
+6. You can act on completed tasks too — never refuse because a task is already done.
+
+7. After a successful create_task, confirm: title + date + time (if set). One sentence max.
+
+8. For availability checks, default window is 09:00–18:00. Summarise free gaps in plain language.
+
+9. Keep all replies short and conversational.
 
 Available categories: ${categories.join(', ')}.
 
-Current tasks:
+Current tasks (use these ids for update/complete/delete):
 ${taskLines}`
 }
 
 export function ChatProvider({ children }) {
   const { state, dispatch } = useTodo()
+  const { lang } = useLanguage()
   const [messages, setMessages] = useState(loadHistory) // {role:'user'|'assistant', content, tools?}
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -100,7 +131,7 @@ export function ChatProvider({ children }) {
     const toolCalls = [] // { name, ok } — used by the verification safeguard
 
     const apiMessages = [
-      { role: 'system', content: buildSystemPrompt(working, categoriesRef.current) },
+      { role: 'system', content: buildSystemPrompt(working, categoriesRef.current, lang) },
       ...priorForApi,
       { role: 'user', content: trimmed },
     ]

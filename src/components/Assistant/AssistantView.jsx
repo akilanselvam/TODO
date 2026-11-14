@@ -1,21 +1,40 @@
 import { useState, useRef, useEffect } from 'react'
 import { useChat } from '../../context/ChatContext'
+import { useLanguage } from '../../context/LanguageContext'
 import ApiKeySettings from './ApiKeySettings'
 
-const suggestions = [
-  "What's on today?",
-  'Add "Call dentist" tomorrow at 3pm',
-  'Am I free Thursday afternoon?',
-  'What tasks are overdue?',
-]
+const SUGGESTIONS = {
+  en: [
+    "What's on today?",
+    'Add "Call dentist" tomorrow at 3pm',
+    'Am I free Thursday afternoon?',
+    'What tasks are overdue?',
+  ],
+  ta: [
+    'இன்று என்ன பணிகள் உள்ளன?',
+    '"மருத்துவர்" நாளை 3 மணிக்கு சேர்',
+    'வியாழன் மாலை நான் காலியா இருக்கேனா?',
+    'காலாவதியான பணிகள் என்ன?',
+  ],
+}
 
-const toolLabels = {
-  create_task: 'Created task',
-  update_task: 'Updated task',
-  complete_task: 'Updated status',
-  delete_task: 'Deleted task',
-  find_tasks: 'Looked up tasks',
-  check_availability: 'Checked availability',
+const TOOL_LABELS = {
+  en: {
+    create_task: 'Created task',
+    update_task: 'Updated task',
+    complete_task: 'Updated status',
+    delete_task: 'Deleted task',
+    find_tasks: 'Looked up tasks',
+    check_availability: 'Checked availability',
+  },
+  ta: {
+    create_task: 'பணி உருவாக்கப்பட்டது',
+    update_task: 'பணி புதுப்பிக்கப்பட்டது',
+    complete_task: 'நிலை மாற்றப்பட்டது',
+    delete_task: 'பணி நீக்கப்பட்டது',
+    find_tasks: 'பணிகள் தேடப்பட்டன',
+    check_availability: 'கிடைக்கும் நேரம் பார்க்கப்பட்டது',
+  },
 }
 
 function TypingDots() {
@@ -34,9 +53,13 @@ function TypingDots() {
 
 export default function AssistantView() {
   const { messages, loading, error, sendMessage, clear, hasKey } = useChat()
+  const { lang } = useLanguage()
   const [input, setInput] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const scrollRef = useRef(null)
+
+  const suggestions = SUGGESTIONS[lang] || SUGGESTIONS.en
+  const toolLabels = TOOL_LABELS[lang] || TOOL_LABELS.en
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -108,8 +131,12 @@ export default function AssistantView() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
-              <p className="text-slate-600 dark:text-slate-300 font-medium">How can I help with your tasks?</p>
-              <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Ask me to add, change, or check on things.</p>
+              <p className="text-slate-600 dark:text-slate-300 font-medium">
+                {lang === 'ta' ? 'உங்கள் பணிகளில் எப்படி உதவட்டுமா?' : 'How can I help with your tasks?'}
+              </p>
+              <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">
+                {lang === 'ta' ? 'சேர்க்க, மாற்ற அல்லது பார்க்க கேளுங்கள்.' : 'Ask me to add, change, or check on things.'}
+              </p>
             </div>
           )}
 
@@ -164,7 +191,7 @@ export default function AssistantView() {
       </div>
 
       {/* Suggestions + input */}
-      <div className="shrink-0 border-t border-slate-200 dark:border-slate-700 px-4 py-3" style={{ transform: 'translateY(-30%)', zIndex: 10 }}>
+      <div className="shrink-0 border-t border-slate-200 dark:border-slate-700 px-4 py-3">
         <div className="max-w-2xl mx-auto">
           {messages.length === 0 && hasKey && (
             <div className="flex flex-wrap gap-2 mb-3">
@@ -184,7 +211,9 @@ export default function AssistantView() {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) submit(e) }}
-              placeholder={hasKey ? 'Message the assistant…' : 'Add your API key to get started'}
+              placeholder={hasKey
+                ? (lang === 'ta' ? 'உதவியாளரிடம் கேளுங்கள்…' : 'Message the assistant…')
+                : (lang === 'ta' ? 'தொடங்க API key சேர்க்கவும்' : 'Add your API key to get started')}
               disabled={!hasKey || loading}
               rows={1}
               className="flex-1 resize-none max-h-32 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 text-sm placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none input-focus-accent disabled:opacity-50 transition-colors"

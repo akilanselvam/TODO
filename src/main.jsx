@@ -5,6 +5,7 @@ import App from './App.jsx'
 import { ThemeProvider } from './context/ThemeContext'
 import { AuthProvider } from './context/AuthContext'
 import { TodoProvider } from './context/TodoContext'
+import { LanguageProvider } from './context/LanguageContext'
 import { ChatProvider } from './context/ChatContext'
 
 createRoot(document.getElementById('root')).render(
@@ -12,9 +13,11 @@ createRoot(document.getElementById('root')).render(
     <ThemeProvider>
       <AuthProvider>
         <TodoProvider>
-          <ChatProvider>
-            <App />
-          </ChatProvider>
+          <LanguageProvider>
+            <ChatProvider>
+              <App />
+            </ChatProvider>
+          </LanguageProvider>
         </TodoProvider>
       </AuthProvider>
     </ThemeProvider>

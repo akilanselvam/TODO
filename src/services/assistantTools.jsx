@@ -7,7 +7,7 @@ export const assistantToolSpecs = [
     type: 'function',
     function: {
       name: 'create_task',
-      description: 'Create a new task/todo. Use for anything the user wants to add or be reminded of.',
+      description: 'Create a new task or reminder. ALWAYS call this when the user says: "remind me", "remind to", "set a reminder", "add a task", "schedule", "don\'t let me forget", or any phrase that means creating something new. Do NOT call find_tasks before this — just create directly.',
       parameters: {
         type: 'object',
         properties: {
@@ -74,7 +74,7 @@ export const assistantToolSpecs = [
     type: 'function',
     function: {
       name: 'find_tasks',
-      description: 'Search tasks by text, date, or status. Use to locate a task id before updating/deleting, or to answer "what do I have on X".',
+      description: 'Search EXISTING tasks by text, date, or status. Use ONLY when the user is asking about tasks that already exist ("what do I have", "find X", "show me X", "is there a task for X"). Do NOT use this when the user wants to CREATE a new task or reminder.',
       parameters: {
         type: 'object',
         properties: {

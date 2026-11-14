@@ -1,95 +1,230 @@
+import { useState } from 'react'
 import { useTodo } from '../../context/TodoContext'
+import { useLanguage } from '../../context/LanguageContext'
 import {
   WEEKDAY_LABELS, getMonthMatrix, isSameDay, isToday, formatTimeLabel, minutesOf,
 } from '../../utils/calendar'
 
-const priorityChip = {
-  high: 'bg-red-100 border-red-400 text-red-800 dark:bg-red-900/40 dark:border-red-500 dark:text-red-200',
-  medium: 'bg-amber-100 border-amber-400 text-amber-800 dark:bg-amber-900/40 dark:border-amber-500 dark:text-amber-200',
-  low: 'bg-green-100 border-green-400 text-green-800 dark:bg-green-900/40 dark:border-green-500 dark:text-green-200',
+const priorityDot = {
+  high:   '#ef4444',
+  medium: '#f59e0b',
+  low:    '#22c55e',
 }
 
-const MAX_CHIPS = 3
+const priorityStyle = {
+  high:   { border: '#ef4444', bg: 'rgba(239,68,68,0.12)',   text: '#fca5a5' },
+  medium: { border: '#f59e0b', bg: 'rgba(245,158,11,0.12)', text: '#fcd34d' },
+  low:    { border: '#22c55e', bg: 'rgba(34,197,94,0.12)',  text: '#86efac' },
+}
 
 export default function MonthView({ cursor, onDayClick, onTaskClick }) {
   const { calendarTodos } = useTodo()
+  const { t, lang } = useLanguage()
   const weeks = getMonthMatrix(cursor)
   const currentMonth = cursor.getMonth()
+
+  const [selectedDay, setSelectedDay] = useState(() => new Date())
 
   const tasksFor = day =>
     calendarTodos
       .filter(t => isSameDay(new Date(t.dueDate), day))
       .sort((a, b) => {
-        // all-day first, then by time
         const am = a.dueTime ? minutesOf(a.dueTime) : -1
         const bm = b.dueTime ? minutesOf(b.dueTime) : -1
         return am - bm
       })
 
+  const selectedTasks = tasksFor(selectedDay)
+
+  const handleDayClick = day => {
+    setSelectedDay(day)
+    // also call onDayClick if it's a double-tap-like intent, but single tap selects
+  }
+
+  const selLabel = selectedDay.toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric',
+  })
+
   return (
-    <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-y-auto overflow-x-hidden">
-      <div className="w-full min-w-0 flex flex-col flex-1">
-        {/* Weekday header */}
-        <div className="grid grid-cols-7 border-b border-slate-200 dark:border-slate-700 shrink-0">
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg)' }}>
+
+      {/* Calendar grid — fixed section */}
+      <div style={{ background: 'var(--bg)', flexShrink: 0 }}>
+        {/* Weekday labels */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', padding: '0 4px' }}>
           {WEEKDAY_LABELS.map(d => (
-            <div key={d} className="py-1.5 sm:py-2 text-center text-[9px] sm:text-[11px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
-              <span className="sm:hidden">{d.slice(0, 1)}</span>
-              <span className="hidden sm:inline">{d}</span>
+            <div
+              key={d}
+              style={{
+                padding: '8px 0 6px',
+                textAlign: 'center',
+                fontSize: '11px', fontWeight: 700,
+                color: 'var(--muted)',
+                textTransform: 'uppercase', letterSpacing: '0.08em',
+              }}
+            >
+              {d.slice(0, 2)}
             </div>
           ))}
         </div>
 
         {/* Weeks */}
-        <div className="grid grid-rows-6 flex-1">
+        <div style={{ padding: '0 4px' }}>
           {weeks.map((week, wi) => (
-            <div key={wi} className="grid grid-cols-7 border-b border-slate-100 dark:border-slate-700/60 last:border-b-0">
+            <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', marginBottom: '2px' }}>
               {week.map((day, di) => {
                 const inMonth = day.getMonth() === currentMonth
+                const today = isToday(day)
+                const selected = isSameDay(day, selectedDay)
                 const dayTasks = tasksFor(day)
-                const shown = dayTasks.slice(0, MAX_CHIPS)
-                const extra = dayTasks.length - shown.length
-                return (
-                  <div
-                    key={di}
-                    onClick={() => onDayClick(day)}
-                    className={`min-w-0 min-h-[72px] sm:min-h-[92px] p-0.5 sm:p-1.5 border-l border-slate-100 dark:border-slate-700/60 first:border-l-0 cursor-pointer transition-colors hover:bg-[var(--panel)] dark:hover:bg-[var(--panel)] ${
-                      inMonth ? '' : 'bg-slate-50/60 dark:bg-slate-900/40'
-                    }`}
-                  >
-                    <div className="flex justify-end">
-                      <span className={`w-5 h-5 sm:w-6 sm:h-6 flex items-center justify-center rounded-full text-[11px] sm:text-xs font-medium ${
-                        isToday(day)
-                          ? 'accent-bg text-white'
-                          : inMonth
-                          ? 'text-slate-600 dark:text-slate-300'
-                          : 'text-slate-300 dark:text-slate-600'
-                      }`}>
-                        {day.getDate()}
-                      </span>
-                    </div>
+                const dots = dayTasks.slice(0, 3)
 
-                    <div className="mt-0.5 sm:mt-1 space-y-0.5 sm:space-y-1">
-                      {shown.map(t => (
-                        <button
-                          key={t.id}
-                          onClick={e => { e.stopPropagation(); onTaskClick(t) }}
-                          className={`w-full min-w-0 flex items-center gap-1 px-1 sm:px-1.5 py-0.5 rounded border-l-2 text-[9px] sm:text-[11px] font-medium truncate ${priorityChip[t.priority]} ${t.completed ? 'line-through opacity-60' : ''}`}
-                          title={`${t.dueTime ? formatTimeLabel(t.dueTime) + ' · ' : ''}${t.title}`}
-                        >
-                          {t.dueTime && <span className="hidden sm:inline opacity-70 tabular-nums shrink-0">{formatTimeLabel(t.dueTime).replace(' ', '')}</span>}
-                          <span className="truncate">{t.title}</span>
-                        </button>
+                return (
+                  <button
+                    key={di}
+                    onClick={() => handleDayClick(day)}
+                    className="transition-all duration-150 active:scale-90"
+                    style={{
+                      display: 'flex', flexDirection: 'column', alignItems: 'center',
+                      padding: '4px 2px 6px',
+                      border: 'none',
+                      borderRadius: '12px',
+                      cursor: 'pointer',
+                      background: selected && !today ? 'rgba(var(--accent-rgb),0.14)' : 'transparent',
+                      transition: 'all 150ms ease',
+                    }}
+                  >
+                    {/* Date number */}
+                    <span style={{
+                      width: '32px', height: '32px',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      borderRadius: '50%',
+                      fontSize: '14px', fontWeight: today || selected ? 800 : inMonth ? 500 : 400,
+                      background: today ? 'var(--accent)' : 'transparent',
+                      color: today
+                        ? '#fff'
+                        : selected
+                        ? 'var(--accent)'
+                        : inMonth
+                        ? 'var(--text)'
+                        : 'var(--muted)',
+                      opacity: inMonth ? 1 : 0.35,
+                    }}>
+                      {day.getDate()}
+                    </span>
+
+                    {/* Priority dots */}
+                    <div style={{ display: 'flex', gap: '2px', marginTop: '3px', height: '5px' }}>
+                      {dots.map((t, ti) => (
+                        <span
+                          key={ti}
+                          style={{
+                            width: '5px', height: '5px', borderRadius: '50%',
+                            background: priorityDot[t.priority],
+                            opacity: inMonth ? 1 : 0.4,
+                          }}
+                        />
                       ))}
-                      {extra > 0 && (
-                        <div className="text-[9px] sm:text-[10px] text-slate-400 dark:text-slate-500 pl-1">+{extra}</div>
-                      )}
                     </div>
-                  </div>
+                  </button>
                 )
               })}
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Divider with selected date label */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '12px',
+        padding: '14px 20px 10px',
+        borderTop: '1px solid rgba(var(--accent-rgb),0.12)',
+      }}>
+        <div>
+          <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            {selLabel}
+          </p>
+          <p style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '1px' }}>
+            {selectedTasks.length === 0
+              ? t('no_tasks_label')
+              : lang === 'ta'
+                ? `${selectedTasks.length} பணிகள்`
+                : `${selectedTasks.length} task${selectedTasks.length !== 1 ? 's' : ''}`}
+          </p>
+        </div>
+        <button
+          onClick={() => onDayClick(selectedDay)}
+          className="active:scale-90"
+          style={{
+            marginLeft: 'auto', padding: '7px 16px', borderRadius: '12px',
+            background: 'rgba(var(--accent-rgb),0.15)', border: 'none',
+            color: 'var(--accent)', fontSize: '12px', fontWeight: 700,
+            cursor: 'pointer', flexShrink: 0,
+          }}
+        >
+          {t('btn_add_task')}
+        </button>
+      </div>
+
+      {/* Task list for selected day */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0 16px 100px' }}>
+        {selectedTasks.length === 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '32px', gap: '8px', opacity: 0.6 }}>
+            <svg width="40" height="40" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'var(--muted)' }}>
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+            <p style={{ fontSize: '13px', color: 'var(--muted)', fontWeight: 600 }}>{t('no_tasks_day')}</p>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {selectedTasks.map(task => {
+              const ps = priorityStyle[task.priority]
+              return (
+                <button
+                  key={task.id}
+                  onClick={() => onTaskClick(task)}
+                  className="active:scale-[0.98]"
+                  style={{
+                    width: '100%', textAlign: 'left',
+                    padding: '12px 14px',
+                    borderRadius: '16px',
+                    background: 'var(--panel)',
+                    borderLeft: 'none',
+                    borderLeftWidth: '3px',
+                    borderLeftStyle: 'solid',
+                    borderLeftColor: ps.border,
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 150ms ease',
+                    opacity: task.completed ? 0.55 : 1,
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                  }}
+                >
+                  {/* Priority dot */}
+                  <span style={{
+                    width: '8px', height: '8px', borderRadius: '50%',
+                    background: ps.border, flexShrink: 0,
+                    boxShadow: `0 0 6px ${ps.border}60`,
+                  }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {task.dueTime && (
+                      <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted)', marginBottom: '2px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        {formatTimeLabel(task.dueTime)}
+                      </p>
+                    )}
+                    <p style={{
+                      fontSize: '14px', fontWeight: 600, color: 'var(--text)',
+                      textDecoration: task.completed ? 'line-through' : 'none',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {task.title}
+                    </p>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )

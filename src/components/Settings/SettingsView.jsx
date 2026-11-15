@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { deleteUser, reauthenticateWithPopup } from 'firebase/auth'
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore'
+import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore'
 import { useAuth } from '../../context/AuthContext'
 import { useTodo } from '../../context/TodoContext'
 import { useLanguage } from '../../context/LanguageContext'
@@ -104,9 +104,8 @@ export default function SettingsView() {
   const [confirm, setConfirm] = useState(null) // { type, title, message, label, danger }
   const [notifEnabled, setNotifEnabledState] = useState(getNotifEnabled)
   const [notifPermission, setNotifPermission] = useState(getPermissionState)
-  const [whatsappNumber, setWhatsappNumber] = useState('')
-  const [whatsappLoading, setWhatsappLoading] = useState(false)
-  const [whatsappSaving, setWhatsappSaving] = useState(false)
+  const [telegramConnected, setTelegramConnected] = useState(false)
+  const [telegramLoading, setTelegramLoading] = useState(false)
   const [siriApiKey, setSiriApiKey] = useState('')
   const [siriLoading, setSiriLoading] = useState(false)
   const [siriKeyCopied, setSiriKeyCopied] = useState(false)
@@ -116,26 +115,6 @@ export default function SettingsView() {
     setToast({ msg, error })
     setTimeout(() => setToast(null), 3000)
   }
-
-  useEffect(() => {
-    if (!uid || !isFirebaseConfigured) {
-      setWhatsappNumber('')
-      return
-    }
-    let cancelled = false
-    setWhatsappLoading(true)
-    getDoc(doc(db, 'users', uid))
-      .then(snapshot => {
-        if (!cancelled) setWhatsappNumber(snapshot.data()?.whatsappNumber || '')
-      })
-      .catch(() => {
-        if (!cancelled) showToast('Could not load your WhatsApp number', true)
-      })
-      .finally(() => {
-        if (!cancelled) setWhatsappLoading(false)
-      })
-    return () => { cancelled = true }
-  }, [uid])
 
   useEffect(() => {
     if (!uid || !isFirebaseConfigured) {
@@ -151,6 +130,16 @@ export default function SettingsView() {
         if (!cancelled) showToast('Could not load your Siri key', true)
       })
     return () => { cancelled = true }
+  }, [uid])
+
+  useEffect(() => {
+    if (!uid || !isFirebaseConfigured) {
+      setTelegramConnected(false)
+      return
+    }
+    return onSnapshot(doc(db, 'users', uid), snapshot => {
+      setTelegramConnected(snapshot.data()?.telegramConnected === true)
+    }, () => {})
   }, [uid])
 
   const handleSiriSetup = async () => {
@@ -198,29 +187,47 @@ export default function SettingsView() {
     }
   }
 
-  const handleSaveWhatsapp = async () => {
-    const value = whatsappNumber.trim()
-    if (value && !/^\+[1-9]\d{7,14}$/.test(value)) {
-      showToast('Enter a valid international number, e.g. +919876543210', true)
+  const handleConnectTelegram = async () => {
+    if (!user || !isFirebaseConfigured) {
+      showToast('Sign in with cloud sync to connect Telegram', true)
       return
     }
-    if (!uid || !isFirebaseConfigured) {
-      showToast('Sign in with cloud sync to save WhatsApp reminders', true)
+    const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID
+    if (!projectId) {
+      showToast('Firebase project ID is not configured', true)
       return
     }
-    setWhatsappSaving(true)
+    setTelegramLoading(true)
+    try {
+      const idToken = await user.getIdToken()
+      const response = await fetch(`https://us-central1-${projectId}.cloudfunctions.net/telegramGenerateLink`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${idToken}` },
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.linkCode) throw new Error(data.error || 'Could not generate Telegram link')
+      const username = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || 'Akssist_bot'
+      window.location.assign(`https://t.me/${username}?start=${data.linkCode}`)
+      showToast('Tap START in Telegram to finish connecting')
+    } catch (error) {
+      showToast(error.message || 'Could not connect Telegram', true)
+    } finally {
+      setTelegramLoading(false)
+    }
+  }
+
+  const handleDisconnectTelegram = async () => {
+    if (!uid || !isFirebaseConfigured) return
     try {
       await setDoc(doc(db, 'users', uid), {
-        whatsappNumber: value,
-        whatsappNotificationsEnabled: Boolean(value),
-        whatsappConsentAt: value ? serverTimestamp() : null,
+        telegramConnected: false,
+        telegramChatId: null,
+        telegramLinkCode: null,
+        telegramLinkCodeCreatedAt: null,
       }, { merge: true })
-      setWhatsappNumber(value)
-      showToast(value ? 'WhatsApp reminders number saved' : 'WhatsApp reminders disabled')
-    } catch (err) {
-      showToast(err.message || 'Could not save your WhatsApp number', true)
-    } finally {
-      setWhatsappSaving(false)
+      showToast('Telegram disconnected')
+    } catch (error) {
+      showToast(error.message || 'Could not disconnect Telegram', true)
     }
   }
 
@@ -567,41 +574,45 @@ export default function SettingsView() {
           </div>
         </Section>
 
-        {/* WhatsApp reminders */}
-        <Section title="WHATSAPP REMINDERS">
+        {/* Telegram reminders */}
+        <Section title="TELEGRAM REMINDERS">
           <div style={{ padding: '14px 16px' }}>
-            <label htmlFor="whatsapp-number" className="block text-sm font-semibold mb-1" style={{ color: 'var(--text)' }}>
-              WhatsApp number
-            </label>
-            <p className="text-xs mb-3" style={{ color: 'var(--muted)' }}>
-              Enter the full international number with country code and no spaces. By saving it, you agree to receive task reminders on WhatsApp. Leave blank and save to turn reminders off.
+            <p className="text-sm mb-3" style={{ color: 'var(--muted)' }}>
+              Get task reminders and manage tasks through the AssistAk Telegram bot.
             </p>
-            <div className="flex gap-2">
-              <input
-                id="whatsapp-number"
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                placeholder="+919876543210"
-                value={whatsappNumber}
-                onChange={event => setWhatsappNumber(event.target.value)}
-                disabled={!user || whatsappLoading || whatsappSaving}
-                className="min-w-0 flex-1 rounded-xl px-3 py-2.5 text-sm outline-none disabled:opacity-50"
-                style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid rgba(var(--accent-rgb),0.16)' }}
-                aria-describedby="whatsapp-help"
-              />
+            {telegramConnected ? (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-2 h-2 rounded-full bg-green-400 inline-block" />
+                  <p className="text-sm font-semibold" style={{ color: '#4ade80' }}>Connected</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDisconnectTelegram}
+                  disabled={!user}
+                  className="rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                  style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
               <button
                 type="button"
-                onClick={handleSaveWhatsapp}
-                disabled={!user || whatsappLoading || whatsappSaving}
-                className="rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={handleConnectTelegram}
+                disabled={!user || telegramLoading}
+                className="rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
                 style={{ background: 'var(--accent)' }}
               >
-                {whatsappSaving ? 'Saving…' : 'Save'}
+                {telegramLoading ? 'Opening Telegram…' : 'Connect Telegram ↗'}
               </button>
-            </div>
-            <p id="whatsapp-help" className="text-xs mt-2" style={{ color: 'var(--muted)' }}>
-              {!user ? 'Sign in and enable cloud sync to configure WhatsApp reminders.' : 'For now, reminders can be delivered only to numbers already enabled for the configured Twilio WhatsApp sender.'}
+            )}
+            <p className="text-xs mt-3" style={{ color: 'var(--muted)' }}>
+              {!user
+                ? 'Sign in and enable cloud sync to connect Telegram.'
+                : telegramConnected
+                  ? 'Message @Akssist_bot to manage tasks and receive due-task reminders.'
+                  : 'Opens Telegram with a one-time link. Tap START to link your account.'}
             </p>
           </div>
         </Section>

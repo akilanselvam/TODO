@@ -1,85 +1,91 @@
-# WhatsApp task reminders
+# Firebase Functions
 
-The scheduled `sendTaskReminders` function checks each signed-in user's
-`users/{uid}/tasks` collection every 5 minutes. It sends one WhatsApp message
-for each incomplete task due in the next 15 minutes or up to 5 minutes ago,
-which catches tasks created shortly before their due time. Due dates and times
-are interpreted in `Asia/Kolkata` by default. Change `TASK_TIME_ZONE` in the
-function environment if the app's users use a different timezone.
+## Telegram bot and task reminders
 
-## Prerequisites
+The `telegramGenerateLink` endpoint creates an authenticated, one-time link code
+for the signed-in user. The app opens the AssistAk bot deep link; when the user
+taps **Start**, Telegram calls `telegramWebhook`, which links the chat to the
+Firestore account. Link codes expire after 15 minutes. The webhook then handles task chat using the same OpenAI
+agent and Firestore task tools as Siri.
 
-- Firebase CLI installed and logged in.
-- The `my-todo-app-akil` project on the Blaze plan, with Cloud Functions,
-  Cloud Build, Artifact Registry, Secret Manager, and Cloud Scheduler enabled.
-- For the current test setup, the Twilio Sandbox sender. Recipients must have
-  joined the Sandbox and have an open 24-hour WhatsApp session for free-form
-  reminder bodies. The app itself does not collect or request a join code.
-  Outside the session window, use a registered production sender and approved
-  template instead.
-- A WhatsApp number saved under Settings in the app, in E.164 format such as
-  `+919876543210`.
+The `sendTaskReminders` scheduled function checks incomplete tasks every five
+minutes and sends a Telegram message when a timed task is due in the next 15
+minutes or was due up to five minutes ago. A Firestore delivery marker prevents
+duplicate reminders. Telegram is now the reminder channel; the Twilio WhatsApp
+function and dependency have been removed.
 
-## Configure and deploy
+### Configure and deploy
 
-From the repository root, set the three Twilio secrets. Firebase CLI prompts
-for each value without requiring credentials to be written into source files:
+The bot token comes from BotFather. Store it as the `TELEGRAM_BOT_TOKEN` Firebase
+secret. `OPENAI_API_KEY` is also required by the existing Siri and Telegram chat
+functions.
+
+The webhook validates Telegram's `X-Telegram-Bot-Api-Secret-Token` header. Create
+a random 64-character hexadecimal value, store it as the `TELEGRAM_WEBHOOK_SECRET`
+Firebase secret, and retain the same value for webhook registration. Keep both
+secret values out of source control and the app's `.env` file.
+
+Generate a webhook secret locally with:
 
 ```sh
-firebase functions:secrets:set TWILIO_ACCOUNT_SID --project my-todo-app-akil
-firebase functions:secrets:set TWILIO_AUTH_TOKEN --project my-todo-app-akil
-firebase functions:secrets:set TWILIO_WHATSAPP_FROM --project my-todo-app-akil
+node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-For the current Sandbox test, use `whatsapp:+14155238886` for
-`TWILIO_WHATSAPP_FROM`. The function sends a free-form body containing the task
-title, due date, and due time. Only recipients already joined to this Sandbox
-with an open 24-hour session will receive these body messages. For reminders
-outside that window, register a production sender, create and approve a
-task-reminder template, then update the function to use its Content SID.
-
-The app asks users only for their international-format number. Saving the
-number records their reminder opt-in; clearing it disables WhatsApp reminders.
-Then deploy:
-
 ```sh
+firebase functions:secrets:set TELEGRAM_BOT_TOKEN --project my-todo-app-akil
+firebase functions:secrets:set TELEGRAM_WEBHOOK_SECRET --project my-todo-app-akil
 firebase deploy --only functions --project my-todo-app-akil
 ```
 
-Scheduled functions require the Firebase project's Blaze plan. The deployment
-creates the Cloud Scheduler job; no browser-side Twilio credentials are used.
-View runtime logs with:
+Register the Telegram webhook once after deployment. Use the deployed
+`telegramWebhook` URL printed by Firebase and the exact webhook secret you
+stored above. For example, from PowerShell (the secure prompts keep values out
+of command history):
+
+```powershell
+function Read-HiddenValue($prompt) {
+  $secure = Read-Host -AsSecureString $prompt
+  $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+  try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
+  finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+}
+$botToken = Read-HiddenValue 'Telegram bot token'
+$webhookSecret = Read-HiddenValue 'Telegram webhook secret'
+$body = @{ url = 'https://us-central1-my-todo-app-akil.cloudfunctions.net/telegramWebhook'; secret_token = $webhookSecret } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$botToken/setWebhook" -ContentType 'application/json' -Body $body
+Remove-Variable botToken, webhookSecret, body
+```
+
+The web app reads `VITE_TELEGRAM_BOT_USERNAME` (defaults to `Akssist_bot`). Set
+it in the frontend build environment, then build and deploy Hosting:
 
 ```sh
-firebase functions:log --only sendTaskReminders --project my-todo-app-akil
+npm run build
+firebase deploy --only hosting --project my-todo-app-akil
 ```
+
+In the app, sign in, open **Settings → Telegram Reminders**, and tap
+**Connect Telegram**. Tap **Start** in Telegram to link the account. The bot can
+then manage tasks and deliver due-task reminders.
+
+Cloud Functions scheduling requires the Firebase project to use the Blaze plan.
 
 ## Siri task assistant
 
-The HTTP functions `siriGenerateKey` and `siriChat` let an iOS Shortcut access a
-user's cloud tasks. `siriGenerateKey` verifies the signed-in Firebase ID token
-and returns that user's stable Siri API key. `siriChat` accepts that key and a
-spoken message, runs the OpenAI tool loop on the server, and stores per-shortcut
-conversation history under `users/{uid}/siriSessions/{sessionId}`. OpenAI calls
-use Node 22's built-in `fetch`; no `node-fetch` dependency is needed.
+`siriGenerateKey` verifies a Firebase ID token and returns the user's stable
+Siri API key. `siriChat` accepts that key and a spoken message, runs the OpenAI
+tool loop on the server, and stores conversation history under
+`users/{uid}/siriSessions/{sessionId}`. OpenAI calls use Node 22's built-in
+`fetch`; there is no `node-fetch` dependency.
 
-Before deploying the Siri functions, configure the server-side OpenAI secret:
+The iOS Shortcut is built and shared from Apple's Shortcuts app. Its iCloud link
+is configured in the frontend build as `VITE_SIRI_SHORTCUT_URL`. The Shortcut
+posts `siriApiKey`, `message`, and an optional `sessionId` to:
 
-```sh
-firebase functions:secrets:set OPENAI_API_KEY --project my-todo-app-akil
-firebase deploy --only functions:siriGenerateKey,functions:siriChat --project my-todo-app-akil
+```text
+https://us-central1-my-todo-app-akil.cloudfunctions.net/siriChat
 ```
 
-The Settings screen derives the `siriGenerateKey` URL from
-`VITE_FIREBASE_PROJECT_ID`. Once the one-time iOS Shortcut has been built and
-shared, set `VITE_SIRI_SHORTCUT_URL` to its iCloud link in the environment used
-to build the web app, then rebuild and deploy Hosting. Without that value, users
-can still generate and copy their Siri API key, but the setup button cannot open
-the Shortcut.
-
-Configure the Shortcut to POST JSON to
-`https://us-central1-my-todo-app-akil.cloudfunctions.net/siriChat` with
-`siriApiKey`, `message`, and an optional `sessionId`. Its import question should
-populate `siriApiKey` from the key shown in TODO Settings. The user document's
-existing owner-only Firestore access protects the key; task operations and Siri
-session history use the Admin SDK and do not need broader client rules.
+The user document's owner-only Firestore access protects the Siri key. Server
+functions use the Admin SDK for task operations and Siri/Telegram session
+history.

@@ -4,19 +4,51 @@ rules_version = '2';
 // /users/{uid}. Reminder delivery markers are server-only.
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function serverManagedUserFields() {
+      return [
+        'siriApiKey',
+        'telegramChatId',
+        'telegramConnected',
+        'telegramLinkCode',
+        'telegramLinkCodeCreatedAt',
+        'telegramConnectedAt',
+      ];
+    }
+
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, delete: if isOwner(userId);
+      allow create: if isOwner(userId)
+        && !request.resource.data.keys().hasAny(serverManagedUserFields());
+      allow update: if isOwner(userId) && (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(serverManagedUserFields())
+        || (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'telegramConnected',
+            'telegramChatId',
+            'telegramLinkCode',
+            'telegramLinkCodeCreatedAt',
+          ])
+          && request.resource.data.telegramConnected == false
+          && request.resource.data.telegramChatId == null
+          && request.resource.data.telegramLinkCode == null
+          && request.resource.data.telegramLinkCodeCreatedAt == null
+        )
+      );
 
       match /tasks/{taskId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if isOwner(userId);
       }
 
       match /categories/{categoryId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if isOwner(userId);
       }
 
       // Delivery markers are written by the Admin SDK only. Clients must not
-      // be able to suppress or forge a WhatsApp reminder delivery.
+      // be able to suppress or forge scheduled reminder delivery.
       match /reminderDeliveries/{deliveryId} {
         allow read, write: if false;
       }

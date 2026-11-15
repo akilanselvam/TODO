@@ -4,19 +4,37 @@ const crypto = require('crypto')
 const { defineSecret } = require('firebase-functions/params')
 const { onRequest } = require('firebase-functions/v2/https')
 const { onSchedule } = require('firebase-functions/v2/scheduler')
-const twilio = require('twilio')
 
 admin.initializeApp()
 
 const db = admin.firestore()
-const accountSid = defineSecret('TWILIO_ACCOUNT_SID')
-const authToken = defineSecret('TWILIO_AUTH_TOKEN')
-const whatsappFrom = defineSecret('TWILIO_WHATSAPP_FROM')
+const telegramBotToken = defineSecret('TELEGRAM_BOT_TOKEN')
+const telegramWebhookSecret = defineSecret('TELEGRAM_WEBHOOK_SECRET')
 const openAiApiKey = defineSecret('OPENAI_API_KEY')
 const timeZone = process.env.TASK_TIME_ZONE || 'Asia/Kolkata'
 const reminderWindowMinutes = 15
 const lateDeliveryGraceMinutes = 5
 const claimLeaseMinutes = 20
+
+async function sendTelegramMessage(token, chatId, text) {
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text: String(text || '').slice(0, 4000) }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    console.error('Telegram sendMessage failed:', error.description || response.statusText)
+  }
+  return response.ok
+}
+
+function isValidTelegramWebhookSecret(received, expected) {
+  if (typeof received !== 'string' || typeof expected !== 'string') return false
+  const actualBuffer = Buffer.from(received)
+  const expectedBuffer = Buffer.from(expected)
+  return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+}
 
 function formatSpokenTime(value) {
   if (typeof value !== 'string') return value
@@ -104,7 +122,7 @@ function buildSiriSystemPrompt(tasks) {
     ? tasks.map(t => `- ${t.id} — "${t.title}" — ${t.dueDate ? `${t.dueDate}${t.dueTime ? ` ${formatSpokenTime(t.dueTime)}` : ' (all-day)'}` : 'no date'} — ${t.priority || 'medium'} — ${t.category || 'Personal'} — ${t.completed ? 'done' : 'open'}`).join('\n')
     : '(no tasks yet)'
 
-  return `You are a friendly, concise voice assistant for a todo app. The user is speaking through Siri.\nToday is ${now.toFormat('EEEE')}, ${today}. Current time is ${formatSpokenTime(now.toFormat('HH:mm'))} (${timeZone}).\n\nRules:\n1. Never confirm an action unless its tool returned ok:true this turn.\n2. For requests to add, schedule, or remember something, call create_task immediately.\n3. Use find_tasks only to locate existing tasks.\n4. Resolve relative dates against ${today}; always set dueDate on new tasks. Morning is 09:00, afternoon 14:00, evening 18:00, tonight 20:00.\n5. Use exact task ids below for updates, completion, or deletion. Ask for clarification if multiple tasks match.\n6. Keep replies short and conversational. Use plain spoken text without markdown.\n7. Speak times in natural 12-hour format with AM/PM: say 14:00 as “2 PM”, 09:30 as “9:30 AM”, and never read a 24-hour time aloud.\n\nCurrent tasks:\n${taskLines}`
+  return `You are a friendly, concise assistant for a todo app. The user may be chatting in Telegram or speaking through Siri.\nToday is ${now.toFormat('EEEE')}, ${today}. Current time is ${formatSpokenTime(now.toFormat('HH:mm'))} (${timeZone}).\n\nRules:\n1. Never confirm an action unless its tool returned ok:true this turn.\n2. For requests to add, schedule, or remember something, call create_task immediately.\n3. Use find_tasks only to locate existing tasks.\n4. Resolve relative dates against ${today}; always set dueDate on new tasks. Morning is 09:00, afternoon 14:00, evening 18:00, tonight 20:00.\n5. Use exact task ids below for updates, completion, or deletion. Ask for clarification if multiple tasks match.\n6. Keep replies short and conversational. Use plain text without markdown.\n7. Speak times in natural 12-hour format with AM/PM: say 14:00 as “2 PM”, 09:30 as “9:30 AM”, and never read a 24-hour time aloud.\n\nCurrent tasks:\n${taskLines}`
 }
 
 function makeSiriExecutors(uid, working) {
@@ -269,6 +287,131 @@ exports.siriChat = onRequest({ region: 'us-central1', cors: true, secrets: [open
   }
 })
 
+exports.telegramGenerateLink = onRequest({ region: 'us-central1', cors: true }, async (req, res) => {
+  if (req.method !== 'POST') return res.status(405).send('Method Not Allowed')
+  const authHeader = req.headers.authorization || ''
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+  if (!idToken) return res.status(401).json({ error: 'Missing auth token' })
+
+  let uid
+  try { uid = (await admin.auth().verifyIdToken(idToken)).uid }
+  catch { return res.status(401).json({ error: 'Invalid auth token' }) }
+
+  try {
+    const linkCode = crypto.randomBytes(16).toString('hex')
+    await db.collection('users').doc(uid).set({
+      telegramLinkCode: linkCode,
+      telegramLinkCodeCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true })
+    return res.json({ linkCode })
+  } catch (error) {
+    console.error('telegramGenerateLink failed:', error.message)
+    return res.status(500).json({ error: 'Could not generate Telegram link' })
+  }
+})
+
+exports.telegramWebhook = onRequest({
+  region: 'us-central1',
+  cors: false,
+  secrets: [telegramBotToken, telegramWebhookSecret, openAiApiKey],
+  timeoutSeconds: 120,
+}, async (req, res) => {
+  if (req.method !== 'POST') return res.sendStatus(405)
+  if (!isValidTelegramWebhookSecret(req.get('x-telegram-bot-api-secret-token'), telegramWebhookSecret.value())) {
+    return res.sendStatus(401)
+  }
+
+  const token = telegramBotToken.value()
+  const message = req.body?.message
+  const chatId = String(message?.chat?.id || '')
+  const text = typeof message?.text === 'string' ? message.text.trim() : ''
+  res.sendStatus(200)
+  if (!chatId || !text) return
+
+  try {
+    const startMatch = text.match(/^\/start(?:@\w+)?(?:\s+([a-f0-9]{32}))?$/i)
+    if (startMatch) {
+      const linkCode = startMatch[1]
+      if (linkCode) {
+        const snapshot = await db.collection('users').where('telegramLinkCode', '==', linkCode).limit(1).get()
+        if (snapshot.empty) {
+          await sendTelegramMessage(token, chatId, 'That link has expired or is invalid. Generate a fresh link from TODO Settings.')
+          return
+        }
+
+        const userDoc = snapshot.docs[0]
+        const linkedChat = await db.collection('users').where('telegramChatId', '==', chatId).limit(1).get()
+        if (!linkedChat.empty && linkedChat.docs[0].id !== userDoc.id) {
+          await sendTelegramMessage(token, chatId, 'This Telegram account is linked to a different TODO account. Disconnect it there first.')
+          return
+        }
+        const linkCreatedAt = userDoc.data().telegramLinkCodeCreatedAt?.toDate?.()
+        const linkAgeMinutes = linkCreatedAt ? (Date.now() - linkCreatedAt.getTime()) / 60000 : Infinity
+        if (linkAgeMinutes < 0 || linkAgeMinutes > 15) {
+          await userDoc.ref.set({ telegramLinkCode: null, telegramLinkCodeCreatedAt: null }, { merge: true })
+          await sendTelegramMessage(token, chatId, 'That link has expired. Generate a fresh link from TODO Settings.')
+          return
+        }
+
+        await userDoc.ref.set({
+          telegramChatId: chatId,
+          telegramConnected: true,
+          telegramLinkCode: null,
+          telegramLinkCodeCreatedAt: null,
+          telegramConnectedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true })
+        const firstName = String(message.from?.first_name || 'there').slice(0, 80)
+        await sendTelegramMessage(token, chatId, `Hello ${firstName}! You're connected to your TODO app. Send me a message to create, update, complete, delete, or find tasks.`)
+        return
+      }
+
+      const existing = await db.collection('users').where('telegramChatId', '==', chatId).limit(1).get()
+      await sendTelegramMessage(token, chatId, existing.empty
+        ? 'Open the TODO app, go to Settings, and tap “Connect Telegram” to link your account.'
+        : "You're already connected. Send me a message to manage your tasks.")
+      return
+    }
+
+    const userSnapshot = await db.collection('users').where('telegramChatId', '==', chatId).limit(1).get()
+    if (userSnapshot.empty || userSnapshot.docs[0].data().telegramConnected !== true) {
+      await sendTelegramMessage(token, chatId, 'Your Telegram account is not linked yet. Open TODO Settings and tap “Connect Telegram”.')
+      return
+    }
+
+    const userDoc = userSnapshot.docs[0]
+    const uid = userDoc.id
+    await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
+    }).catch(() => {})
+
+    const taskSnapshot = await userDoc.ref.collection('tasks').get()
+    const working = taskSnapshot.docs.map(document => ({ id: document.id, ...document.data() }))
+    const sessionRef = userDoc.ref.collection('telegramSessions').doc('default')
+    const sessionDoc = await sessionRef.get()
+    const history = Array.isArray(sessionDoc.data()?.messages)
+      ? sessionDoc.data().messages.filter(item => ['user', 'assistant'].includes(item.role) && typeof item.content === 'string').slice(-20)
+      : []
+    const messages = [
+      { role: 'system', content: buildSiriSystemPrompt(working) },
+      ...history,
+      { role: 'user', content: text.slice(0, 2000) },
+    ]
+    const executors = makeSiriExecutors(uid, working)
+    const { content, thread } = await runSiriAgent(messages, async (name, args) => {
+      const executor = executors[name]
+      return executor ? executor(args) : { ok: false, error: `Unknown tool: ${name}` }
+    })
+    const updatedHistory = thread.filter(item => item.role === 'user' || item.role === 'assistant').slice(-20)
+    await sessionRef.set({ messages: updatedHistory, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+    await sendTelegramMessage(token, chatId, content || 'I could not form a reply. Please try again.')
+  } catch (error) {
+    console.error('telegramWebhook failed:', error.message)
+    await sendTelegramMessage(token, chatId, 'Something went wrong. Please try again.')
+  }
+})
+
 function parseDueAt(task) {
   if (typeof task.dueDate !== 'string' || typeof task.dueTime !== 'string') return null
   const dueAt = DateTime.fromFormat(
@@ -309,15 +452,12 @@ exports.sendTaskReminders = onSchedule({
   timeZone,
   region: 'us-central1',
   maxInstances: 1,
-  secrets: [accountSid, authToken, whatsappFrom],
+  secrets: [telegramBotToken],
 }, async () => {
   const now = DateTime.now().setZone(timeZone)
   const windowStart = now.minus({ minutes: lateDeliveryGraceMinutes })
   const windowEnd = now.plus({ minutes: reminderWindowMinutes })
-  const client = twilio(accountSid.value(), authToken.value())
-  const from = whatsappFrom.value().startsWith('whatsapp:')
-    ? whatsappFrom.value()
-    : `whatsapp:${whatsappFrom.value()}`
+  const token = telegramBotToken.value()
 
   const users = await db.collection('users').get()
   let sentCount = 0
@@ -325,8 +465,8 @@ exports.sendTaskReminders = onSchedule({
 
   for (const userDoc of users.docs) {
     const user = userDoc.data()
-    const number = user.whatsappNumber
-    if (user.whatsappNotificationsEnabled !== true || typeof number !== 'string' || !/^\+[1-9]\d{7,14}$/.test(number)) continue
+    const chatId = user.telegramChatId
+    if (user.telegramConnected !== true || typeof chatId !== 'string' || !chatId) continue
 
     const tasks = await userDoc.ref.collection('tasks').where('completed', '==', false).get()
     for (const taskDoc of tasks.docs) {
@@ -340,20 +480,21 @@ exports.sendTaskReminders = onSchedule({
 
       try {
         const title = (task.title || 'Untitled task').replace(/\s+/g, ' ').trim().slice(0, 160)
-        await client.messages.create({
-          from,
-          to: `whatsapp:${number}`,
-          body: `⏰ Task reminder: "${title}" is due on ${dueAt.toFormat('LLLL d')} at ${dueAt.toFormat('h:mm a')}.`,
-        })
+        const sent = await sendTelegramMessage(
+          token,
+          chatId,
+          `⏰ Task reminder: "${title}" is due on ${dueAt.toFormat('LLLL d')} at ${dueAt.toFormat('h:mm a')}.`
+        )
+        if (!sent) throw new Error('Telegram send returned false')
         await claimRef.set({ status: 'sent', sentAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
         sentCount += 1
       } catch (error) {
         await claimRef.delete().catch(() => {})
         failedCount += 1
-        console.error(`WhatsApp reminder failed for user ${userDoc.id}, task ${taskDoc.id}:`, error.message)
+        console.error(`Telegram reminder failed for user ${userDoc.id}, task ${taskDoc.id}:`, error.message)
       }
     }
   }
 
-  console.log(`WhatsApp reminders finished: ${sentCount} sent, ${failedCount} failed`)
+  console.log(`Telegram reminders finished: ${sentCount} sent, ${failedCount} failed`)
 })

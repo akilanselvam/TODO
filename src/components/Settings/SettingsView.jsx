@@ -107,6 +107,10 @@ export default function SettingsView() {
   const [whatsappNumber, setWhatsappNumber] = useState('')
   const [whatsappLoading, setWhatsappLoading] = useState(false)
   const [whatsappSaving, setWhatsappSaving] = useState(false)
+  const [siriApiKey, setSiriApiKey] = useState('')
+  const [siriLoading, setSiriLoading] = useState(false)
+  const [siriKeyCopied, setSiriKeyCopied] = useState(false)
+  const siriShortcutUrl = import.meta.env.VITE_SIRI_SHORTCUT_URL || ''
 
   const showToast = (msg, error = false) => {
     setToast({ msg, error })
@@ -132,6 +136,67 @@ export default function SettingsView() {
       })
     return () => { cancelled = true }
   }, [uid])
+
+  useEffect(() => {
+    if (!uid || !isFirebaseConfigured) {
+      setSiriApiKey('')
+      return
+    }
+    let cancelled = false
+    getDoc(doc(db, 'users', uid))
+      .then(snapshot => {
+        if (!cancelled) setSiriApiKey(snapshot.data()?.siriApiKey || '')
+      })
+      .catch(() => {
+        if (!cancelled) showToast('Could not load your Siri key', true)
+      })
+    return () => { cancelled = true }
+  }, [uid])
+
+  const handleSiriSetup = async () => {
+    if (!user || !isFirebaseConfigured) {
+      showToast('Sign in with cloud sync to set up Siri', true)
+      return
+    }
+    const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID
+    if (!projectId) {
+      showToast('Firebase project ID is not configured', true)
+      return
+    }
+
+    setSiriLoading(true)
+    try {
+      const idToken = await user.getIdToken()
+      const response = await fetch(`https://us-central1-${projectId}.cloudfunctions.net/siriGenerateKey`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${idToken}` },
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.siriApiKey) throw new Error(data.error || 'Could not create your Siri key')
+      setSiriApiKey(data.siriApiKey)
+
+      if (siriShortcutUrl) {
+        try { await navigator.clipboard.writeText(data.siriApiKey) } catch { /* key remains available below to copy manually */ }
+        window.location.assign(siriShortcutUrl)
+      } else {
+        showToast('Siri key ready. Copy it below; the Shortcut link is not configured yet.')
+      }
+    } catch (error) {
+      showToast(error.message || 'Could not set up Siri', true)
+    } finally {
+      setSiriLoading(false)
+    }
+  }
+
+  const handleCopySiriKey = async () => {
+    try {
+      await navigator.clipboard.writeText(siriApiKey)
+      setSiriKeyCopied(true)
+      setTimeout(() => setSiriKeyCopied(false), 2000)
+    } catch {
+      showToast('Could not copy the key. Select and copy it manually.', true)
+    }
+  }
 
   const handleSaveWhatsapp = async () => {
     const value = whatsappNumber.trim()
@@ -454,6 +519,51 @@ export default function SettingsView() {
                 boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
               }} />
             </button>
+          </div>
+        </Section>
+
+        {/* Siri Integration */}
+        <Section title="SIRI INTEGRATION">
+          <div style={{ padding: '14px 16px' }}>
+            <p className="text-sm mb-3" style={{ color: 'var(--muted)' }}>
+              Control your tasks hands-free with Siri on your iPhone. Set up a personal key for the Shortcut.
+            </p>
+            <button
+              type="button"
+              onClick={handleSiriSetup}
+              disabled={!user || siriLoading}
+              className="rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+              style={{ background: 'var(--accent)' }}
+            >
+              {siriLoading ? 'Setting up…' : siriApiKey ? (siriShortcutUrl ? 'Reconnect Siri ↗' : 'Refresh Siri key') : (siriShortcutUrl ? 'Set up Siri ↗' : 'Set up Siri')}
+            </button>
+            {siriApiKey && (
+              <div className="mt-4">
+                <p className="text-xs mb-2" style={{ color: 'var(--muted)' }}>
+                  Your Siri API key — paste this when the Shortcut asks:
+                </p>
+                <div className="flex items-start gap-2">
+                  <code className="min-w-0 flex-1 rounded-lg px-2 py-2 text-xs break-all" style={{ color: 'var(--text)', background: 'var(--bg)' }}>
+                    {siriApiKey}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={handleCopySiriKey}
+                    className="rounded-lg px-3 py-2 text-xs font-semibold"
+                    style={{ background: 'rgba(var(--accent-rgb),0.12)', color: 'var(--text)' }}
+                  >
+                    {siriKeyCopied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+            )}
+            <p className="text-xs mt-3" style={{ color: 'var(--muted)' }}>
+              {!user
+                ? 'Sign in and enable cloud sync to configure Siri.'
+                : siriShortcutUrl
+                  ? 'Your key is copied when you reconnect. Paste it into the Shortcut import question.'
+                  : 'The Shortcut iCloud link has not been configured yet. Add VITE_SIRI_SHORTCUT_URL after sharing the Shortcut from an iPhone.'}
+            </p>
           </div>
         </Section>
 

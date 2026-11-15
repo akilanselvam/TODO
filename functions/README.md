@@ -53,3 +53,33 @@ View runtime logs with:
 ```sh
 firebase functions:log --only sendTaskReminders --project my-todo-app-akil
 ```
+
+## Siri task assistant
+
+The HTTP functions `siriGenerateKey` and `siriChat` let an iOS Shortcut access a
+user's cloud tasks. `siriGenerateKey` verifies the signed-in Firebase ID token
+and returns that user's stable Siri API key. `siriChat` accepts that key and a
+spoken message, runs the OpenAI tool loop on the server, and stores per-shortcut
+conversation history under `users/{uid}/siriSessions/{sessionId}`. OpenAI calls
+use Node 22's built-in `fetch`; no `node-fetch` dependency is needed.
+
+Before deploying the Siri functions, configure the server-side OpenAI secret:
+
+```sh
+firebase functions:secrets:set OPENAI_API_KEY --project my-todo-app-akil
+firebase deploy --only functions:siriGenerateKey,functions:siriChat --project my-todo-app-akil
+```
+
+The Settings screen derives the `siriGenerateKey` URL from
+`VITE_FIREBASE_PROJECT_ID`. Once the one-time iOS Shortcut has been built and
+shared, set `VITE_SIRI_SHORTCUT_URL` to its iCloud link in the environment used
+to build the web app, then rebuild and deploy Hosting. Without that value, users
+can still generate and copy their Siri API key, but the setup button cannot open
+the Shortcut.
+
+Configure the Shortcut to POST JSON to
+`https://us-central1-my-todo-app-akil.cloudfunctions.net/siriChat` with
+`siriApiKey`, `message`, and an optional `sessionId`. Its import question should
+populate `siriApiKey` from the key shown in TODO Settings. The user document's
+existing owner-only Firestore access protects the key; task operations and Siri
+session history use the Admin SDK and do not need broader client rules.

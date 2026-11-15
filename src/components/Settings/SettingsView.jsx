@@ -1,9 +1,10 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { deleteUser, reauthenticateWithPopup } from 'firebase/auth'
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore'
 import { useAuth } from '../../context/AuthContext'
 import { useTodo } from '../../context/TodoContext'
 import { useLanguage } from '../../context/LanguageContext'
-import { auth, googleProvider } from '../../services/firebase'
+import { auth, db, googleProvider, isFirebaseConfigured } from '../../services/firebase'
 import {
   exportJSON, exportCSV, parseImportFile,
   clearFirestoreData, clearLocalData,
@@ -103,10 +104,59 @@ export default function SettingsView() {
   const [confirm, setConfirm] = useState(null) // { type, title, message, label, danger }
   const [notifEnabled, setNotifEnabledState] = useState(getNotifEnabled)
   const [notifPermission, setNotifPermission] = useState(getPermissionState)
+  const [whatsappNumber, setWhatsappNumber] = useState('')
+  const [whatsappLoading, setWhatsappLoading] = useState(false)
+  const [whatsappSaving, setWhatsappSaving] = useState(false)
 
   const showToast = (msg, error = false) => {
     setToast({ msg, error })
     setTimeout(() => setToast(null), 3000)
+  }
+
+  useEffect(() => {
+    if (!uid || !isFirebaseConfigured) {
+      setWhatsappNumber('')
+      return
+    }
+    let cancelled = false
+    setWhatsappLoading(true)
+    getDoc(doc(db, 'users', uid))
+      .then(snapshot => {
+        if (!cancelled) setWhatsappNumber(snapshot.data()?.whatsappNumber || '')
+      })
+      .catch(() => {
+        if (!cancelled) showToast('Could not load your WhatsApp number', true)
+      })
+      .finally(() => {
+        if (!cancelled) setWhatsappLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [uid])
+
+  const handleSaveWhatsapp = async () => {
+    const value = whatsappNumber.trim()
+    if (value && !/^\+[1-9]\d{7,14}$/.test(value)) {
+      showToast('Enter a valid international number, e.g. +919876543210', true)
+      return
+    }
+    if (!uid || !isFirebaseConfigured) {
+      showToast('Sign in with cloud sync to save WhatsApp reminders', true)
+      return
+    }
+    setWhatsappSaving(true)
+    try {
+      await setDoc(doc(db, 'users', uid), {
+        whatsappNumber: value,
+        whatsappNotificationsEnabled: Boolean(value),
+        whatsappConsentAt: value ? serverTimestamp() : null,
+      }, { merge: true })
+      setWhatsappNumber(value)
+      showToast(value ? 'WhatsApp reminders number saved' : 'WhatsApp reminders disabled')
+    } catch (err) {
+      showToast(err.message || 'Could not save your WhatsApp number', true)
+    } finally {
+      setWhatsappSaving(false)
+    }
   }
 
   // ── Export ──────────────────────────────────────────────────────────────────
@@ -404,6 +454,45 @@ export default function SettingsView() {
                 boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
               }} />
             </button>
+          </div>
+        </Section>
+
+        {/* WhatsApp reminders */}
+        <Section title="WHATSAPP REMINDERS">
+          <div style={{ padding: '14px 16px' }}>
+            <label htmlFor="whatsapp-number" className="block text-sm font-semibold mb-1" style={{ color: 'var(--text)' }}>
+              WhatsApp number
+            </label>
+            <p className="text-xs mb-3" style={{ color: 'var(--muted)' }}>
+              Enter the full international number with country code and no spaces. By saving it, you agree to receive task reminders on WhatsApp. Leave blank and save to turn reminders off.
+            </p>
+            <div className="flex gap-2">
+              <input
+                id="whatsapp-number"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="+919876543210"
+                value={whatsappNumber}
+                onChange={event => setWhatsappNumber(event.target.value)}
+                disabled={!user || whatsappLoading || whatsappSaving}
+                className="min-w-0 flex-1 rounded-xl px-3 py-2.5 text-sm outline-none disabled:opacity-50"
+                style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid rgba(var(--accent-rgb),0.16)' }}
+                aria-describedby="whatsapp-help"
+              />
+              <button
+                type="button"
+                onClick={handleSaveWhatsapp}
+                disabled={!user || whatsappLoading || whatsappSaving}
+                className="rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                style={{ background: 'var(--accent)' }}
+              >
+                {whatsappSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            <p id="whatsapp-help" className="text-xs mt-2" style={{ color: 'var(--muted)' }}>
+              {!user ? 'Sign in and enable cloud sync to configure WhatsApp reminders.' : 'For now, reminders can be delivered only to numbers already enabled for the configured Twilio WhatsApp sender.'}
+            </p>
           </div>
         </Section>
 

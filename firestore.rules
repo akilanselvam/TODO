@@ -1,14 +1,24 @@
 rules_version = '2';
 
-// Each signed-in user can read/write only their own document tree under
-// /users/{uid}. The app stores all data in the single doc /users/{uid}.
+// Each signed-in user can access their profile and task data under
+// /users/{uid}. Reminder delivery markers are server-only.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
 
-      match /{document=**} {
+      match /tasks/{taskId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      match /categories/{categoryId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Delivery markers are written by the Admin SDK only. Clients must not
+      // be able to suppress or forge a WhatsApp reminder delivery.
+      match /reminderDeliveries/{deliveryId} {
+        allow read, write: if false;
       }
     }
   }

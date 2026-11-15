@@ -29,6 +29,35 @@ async function sendTelegramMessage(token, chatId, text) {
   return response.ok
 }
 
+async function sendTelegramProgress(token, chatId) {
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: 'Thinking…' }),
+      signal: AbortSignal.timeout(5000),
+    })
+    const data = await response.json().catch(() => ({}))
+    return response.ok ? data.result?.message_id || null : null
+  } catch {
+    return null
+  }
+}
+
+async function editTelegramMessage(token, chatId, messageId, text) {
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId, text: String(text || '').slice(0, 4000) }),
+      signal: AbortSignal.timeout(5000),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
 function isValidTelegramWebhookSecret(received, expected) {
   if (typeof received !== 'string' || typeof expected !== 'string') return false
   const actualBuffer = Buffer.from(received)
@@ -192,14 +221,24 @@ function makeSiriExecutors(uid, working) {
   }
 }
 
-async function runSiriAgent(messages, executeTool) {
+async function runSiriAgent(messages, executeTool, options = {}) {
+  const { channel = 'siri', maxSteps = 6, maxTokens } = options
   const thread = [...messages]
-  for (let step = 0; step < 6; step += 1) {
+  for (let step = 0; step < maxSteps; step += 1) {
+    const startedAt = Date.now()
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAiApiKey.value()}` },
-      body: JSON.stringify({ model: 'gpt-4o-mini', messages: thread, tools: siriToolSpecs, tool_choice: 'auto', temperature: 0.2 }),
+      body: JSON.stringify({
+        model: 'gpt-4o-mini', messages: thread, tools: siriToolSpecs,
+        tool_choice: 'auto', temperature: 0.2,
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
+      }),
+      ...(channel === 'telegram' ? { signal: AbortSignal.timeout(30000) } : {}),
     })
+    if (channel === 'telegram') {
+      console.log(`OpenAI Telegram round ${step + 1} completed in ${Date.now() - startedAt}ms (HTTP ${response.status})`)
+    }
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.error?.message || `OpenAI request failed (${response.status})`)
     const message = data.choices?.[0]?.message
@@ -328,6 +367,8 @@ exports.telegramWebhook = onRequest({
   res.sendStatus(200)
   if (!chatId || !text) return
 
+  const requestStartedAt = Date.now()
+  let progressMessageId = null
   try {
     const startMatch = text.match(/^\/start(?:@\w+)?(?:\s+([a-f0-9]{32}))?$/i)
     if (startMatch) {
@@ -380,18 +421,24 @@ exports.telegramWebhook = onRequest({
 
     const userDoc = userSnapshot.docs[0]
     const uid = userDoc.id
+    progressMessageId = await sendTelegramProgress(token, chatId)
     await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
+      signal: AbortSignal.timeout(3000),
     }).catch(() => {})
 
-    const taskSnapshot = await userDoc.ref.collection('tasks').get()
-    const working = taskSnapshot.docs.map(document => ({ id: document.id, ...document.data() }))
     const sessionRef = userDoc.ref.collection('telegramSessions').doc('default')
-    const sessionDoc = await sessionRef.get()
+    const firestoreStartedAt = Date.now()
+    const [taskSnapshot, sessionDoc] = await Promise.all([
+      userDoc.ref.collection('tasks').get(),
+      sessionRef.get(),
+    ])
+    const working = taskSnapshot.docs.map(document => ({ id: document.id, ...document.data() }))
+    console.log(`Telegram Firestore reads completed in ${Date.now() - firestoreStartedAt}ms (${working.length} tasks)`)
     const history = Array.isArray(sessionDoc.data()?.messages)
-      ? sessionDoc.data().messages.filter(item => ['user', 'assistant'].includes(item.role) && typeof item.content === 'string').slice(-20)
+      ? sessionDoc.data().messages.filter(item => ['user', 'assistant'].includes(item.role) && typeof item.content === 'string').slice(-10)
       : []
     const messages = [
       { role: 'system', content: buildSiriSystemPrompt(working) },
@@ -402,13 +449,22 @@ exports.telegramWebhook = onRequest({
     const { content, thread } = await runSiriAgent(messages, async (name, args) => {
       const executor = executors[name]
       return executor ? executor(args) : { ok: false, error: `Unknown tool: ${name}` }
-    })
-    const updatedHistory = thread.filter(item => item.role === 'user' || item.role === 'assistant').slice(-20)
+    }, { channel: 'telegram', maxSteps: 4, maxTokens: 400 })
+    const updatedHistory = thread.filter(item => item.role === 'user' || item.role === 'assistant').slice(-10)
     await sessionRef.set({ messages: updatedHistory, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
-    await sendTelegramMessage(token, chatId, content || 'I could not form a reply. Please try again.')
+    const reply = content || 'I could not form a reply. Please try again.'
+    const edited = progressMessageId
+      ? await editTelegramMessage(token, chatId, progressMessageId, reply)
+      : false
+    if (!edited) await sendTelegramMessage(token, chatId, reply)
+    console.log(`Telegram reply completed in ${Date.now() - requestStartedAt}ms`)
   } catch (error) {
     console.error('telegramWebhook failed:', error.message)
-    await sendTelegramMessage(token, chatId, 'Something went wrong. Please try again.')
+    const reply = 'Something went wrong. Please try again.'
+    const edited = progressMessageId
+      ? await editTelegramMessage(token, chatId, progressMessageId, reply)
+      : false
+    if (!edited) await sendTelegramMessage(token, chatId, reply)
   }
 })
 
